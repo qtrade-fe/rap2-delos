@@ -44,9 +44,9 @@ let config: IConfigOptions = {
   },
   mailSender: "rap2_notify@outlook.com",
   work_wx: {
-    corpId: "ww2931230e8e77ae73",
-    agentId: "1000065",
-    agentSecret: "GxcBTE6TUzfkCuJXEdBKao5nZeYB2MoVS8vQhh4M61U"
+    corpId: process.env.WORK_WEIXIN_CORPID || '',
+    agentId: process.env.WORK_WEIXIN_AGENTID || '',
+    agentSecret:  process.env.WORK_WEIXIN_AGENT_SECRET || ''
   }
 }
 
