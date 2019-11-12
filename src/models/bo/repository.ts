@@ -38,6 +38,9 @@ export default class Repository extends Model<Repository> {
   @Column(DataType.STRING(256))
   logo: string
 
+  @Column(DataType.STRING(256))
+  sourceUrl: string
+
   @AllowNull(false)
   @Default(true)
   @Column({ comment: 'true:public, false:private' })

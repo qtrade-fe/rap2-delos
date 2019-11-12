@@ -1,7 +1,7 @@
 import { IConfigOptions } from "../types"
 
 let config: IConfigOptions = {
-  version: '2.7.0',
+  version: '2.7.2',
   serve: {
     port: 8080,
     path: '',
@@ -35,6 +35,11 @@ let config: IConfigOptions = {
     }
   },
   mailSender: '',
+  work_wx: {
+    corpId: 'wwded713f7f22ac9f7',
+    agentId: '',
+    agentSecret: 'O96D3UinLFeo3peIowkC-cXZtETPqXifLiTYFiyg654'
+  },
 }
 
 export default config

@@ -166,6 +166,23 @@ router.all('/app/mock/:repositoryId(\\d+)/:url(.+)', async (ctx) => {
     return url
   }
 
+  function checkRequiredProperties(property: Property, params: any) {
+    const position = getPosition(property.pos)
+    return typeof params[position][property.name] === 'undefined'
+  }
+  function getPosition(pos: number) {
+    switch (pos) {
+      case 1:
+        return "header"
+      case 2:
+        return "query"
+      case 3:
+        return "body"
+      default:
+        return "query"
+    }
+  }
+
   // matching by path
   if (matchedItfList.length > 1) {
     matchedItfList = matchedItfList.filter(x => {
@@ -281,20 +298,26 @@ router.all('/app/mock/:repositoryId(\\d+)/:url(.+)', async (ctx) => {
     })
     let passed = true
     let pFailed: Property | undefined
-    let params = method === 'GET' ? { ...ctx.request.query } : { ...ctx.request.body }
+
+    const params = {
+      query: { ...ctx.request.query },
+      body: { ...ctx.request.body },
+      header: { ...ctx.request.headers }
+    }
     // http request中head的参数未添加，会造成head中的参数必填勾选后即使header中有值也会检查不通过
-    params = Object.assign(params, ctx.request.headers)
     for (const p of requiredProperties) {
-      if (typeof params[p.name] === 'undefined') {
+
+      if (checkRequiredProperties(p, params)) {
         passed = false
         pFailed = p
         break
       }
     }
     if (!passed) {
+      const position = getPosition(pFailed.pos)
       ctx.body = {
         isOk: false,
-        errMsg: `必选参数${pFailed.name}未传值。 Required parameter ${pFailed.name} has no value.`,
+        errMsg: `${position}必选参数${pFailed.name}未传值。 Required parameter ${pFailed.name} has no value in ${position}.`,
       }
       return
     }

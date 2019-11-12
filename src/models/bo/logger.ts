@@ -4,6 +4,7 @@ import { User, Repository, Organization, Module, Interface } from '../'
 enum types {
   CREATE = 'create', UPDATE = 'update', DELETE = 'delete',
   LOCK = 'lock', UNLOCK = 'unlock', JOIN = 'join', EXIT = 'exit',
+  SYNC = 'sync'
 }
 
 @Table({ paranoid: true, freezeTableName: false, timestamps: true })
@@ -17,7 +18,7 @@ export default class Logger extends Model<Logger> {
 
   @AllowNull(false)
   @Column({
-    type: DataType.ENUM(types.CREATE, types.UPDATE, types.DELETE, types.LOCK, types.UNLOCK, types.JOIN, types.EXIT),
+    type: DataType.ENUM(types.CREATE, types.UPDATE, types.DELETE, types.LOCK, types.UNLOCK, types.JOIN, types.EXIT, types.SYNC),
     comment: 'operation type',
   })
   type: string

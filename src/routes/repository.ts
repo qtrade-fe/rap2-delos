@@ -1,6 +1,7 @@
 // TODO 2.1 大数据测试，含有大量模块、接口、属性的仓库
 import router from './router'
 import * as _ from 'underscore'
+// import * as moment from 'moment'
 import Pagination from './utils/pagination'
 import { User, Organization, Repository, Module, Interface, Property, QueryInclude, Logger } from '../models'
 import Tree from './utils/tree'
@@ -9,7 +10,8 @@ import * as Consts from './utils/const'
 import RedisService, { CACHE_KEY } from '../service/redis'
 import MigrateService from '../service/migrate'
 import { Op } from 'sequelize'
-import { isLoggedIn } from './base'
+import { isLoggedIn, isTokenAccess } from './base'
+
 
 const { initRepository, initModule } = require('./utils/helper')
 
@@ -167,8 +169,9 @@ router.get('/repository/joined', isLoggedIn, async (ctx) => {
   }
 })
 
-router.get('/repository/get', async (ctx) => {
-  const access = await AccessUtils.canUserAccess(ACCESS_TYPE.REPOSITORY, ctx.session.id, ctx.query.id)
+router.get('/repository/get', isTokenAccess, isLoggedIn, async (ctx) => {
+  const { tokenAccess } = ctx.state
+  const access = tokenAccess || await AccessUtils.canUserAccess(ACCESS_TYPE.REPOSITORY, ctx.session.id, ctx.query.id)
   if (access === false) {
     ctx.body = {
       isOk: false,
@@ -179,6 +182,7 @@ router.get('/repository/get', async (ctx) => {
   const tryCache = await RedisService.getCache(CACHE_KEY.REPOSITORY_GET, ctx.query.id)
   let repository: Partial<Repository>
   if (tryCache) {
+    console.log('target cache')
     repository = JSON.parse(tryCache)
   } else {
     // 分开查询减少
@@ -217,7 +221,6 @@ router.get('/repository/get', async (ctx) => {
       JSON.stringify(repository),
       ctx.query.id
     )
-    await RedisService.setCache(CACHE_KEY.REPOSITORY_GET, JSON.stringify(repository), ctx.query.id)
   }
   ctx.body = {
     data: repository,
@@ -532,10 +535,12 @@ router.get('/interface/list', async (ctx) => {
     }),
   }
 })
-router.get('/interface/get', async (ctx) => {
+router.get('/interface/get', isTokenAccess, isLoggedIn, async (ctx) => {
+  const { tokenAccess } = ctx.state
   let { id, repositoryId, method, url } = ctx.query
+  const access = tokenAccess || await AccessUtils.canUserAccess(ACCESS_TYPE.INTERFACE, ctx.session.id, +id)
 
-  if (!await AccessUtils.canUserAccess(ACCESS_TYPE.REPOSITORY, ctx.session.id, repositoryId)) {
+  if (access === false) {
     ctx.body = Consts.COMMON_ERROR_RES.ACCESS_DENY
     return
   }
@@ -800,6 +805,38 @@ router.post('/interface/sort', async (ctx) => {
   }
 })
 
+router.post('/interface/sync', async (ctx, next) => {
+  if (!ctx.session.id) {
+    ctx.body = Consts.COMMON_ERROR_RES.NOT_LOGIN
+    return
+  }
+
+  const { id } = ctx.request.body
+
+  const counter = await MigrateService.syncInterfaceByDocUrl(id, ctx.session.id)
+  const itf = await Interface.findByPk(id, {
+    include: [QueryInclude.Properties]
+  })
+
+  ctx.body = {
+    data: {
+      itf,
+      counter
+    },
+  }
+  return next()
+}, async (ctx) => {
+  if (!ctx.body.data) return
+  let { itf } = ctx.body.data
+  await Logger.create({
+    userId: ctx.session.id,
+    type: 'sync',
+    repositoryId: itf.repositoryId,
+    moduleId: itf.moduleId,
+    interfaceId: itf.id,
+  })
+})
+
 router.get('/property/count', async (ctx) => {
   ctx.body = {
     data: 0
@@ -896,6 +933,7 @@ router.post('/properties/update', isLoggedIn, async (ctx, next) => {
   */
   let existingProperties = properties.filter((item: any) => !item.memory)
   let result = await Property.destroy({
+    force: true,
     where: {
       id: { [Op.notIn]: existingProperties.map((item: any) => item.id) },
       interfaceId: itfId
@@ -960,23 +998,84 @@ router.get('/property/remove', isLoggedIn, async (ctx) => {
   }
   ctx.body = {
     data: await Property.destroy({
+      force: true,
       where: { id },
     }),
   }
 })
 
-router.post('/repository/import', isLoggedIn, async (ctx) => {
-  const { docUrl, orgId } = ctx.request.body
-  if (!await AccessUtils.canUserAccess(ACCESS_TYPE.ORGANIZATION, ctx.session.id, orgId)) {
-    ctx.body = Consts.COMMON_ERROR_RES.ACCESS_DENY
-    return
+router.post("/repository/import", isLoggedIn, async ctx => {
+  const { docUrl, orgId, version } = ctx.request.body
+  let result = false
+  switch (version) {
+    case "rap1":
+      result = await MigrateService.importRepoFromRAP1DocUrl(
+        orgId,
+        ctx.session.id,
+        docUrl
+      )
+      break
+    case "swagger":
+      result = await MigrateService.importRepoFromSwaggerDocUrl(
+        orgId,
+        ctx.session.id,
+        docUrl
+      )
+      break
+    default:
+      break
   }
-  const result = await MigrateService.importRepoFromRAP1DocUrl(orgId, ctx.session.id, docUrl)
+
   ctx.body = {
     isOk: result,
-    message: result ? '导入成功' : '导入失败',
+    message: result ? "导入成功" : "导入失败",
     repository: {
-      id: 1,
+      id: 1
+    }
+  }
+})
+
+router.post("/repository/import/swagger/data", async ctx => {
+  if (!ctx.session || !ctx.session.id) {
+    ctx.body = {
+      isOk: false,
+      message: "NOT LOGIN"
+    }
+    return
+  }
+  const { apiDocs, orgId, docUrl } = ctx.request.body
+
+  let result = false
+  try {
+    if (_.isArray(apiDocs)) {
+      for (const apiDoc of apiDocs) {
+        await MigrateService.importRepoFromSwaggerDocData(
+          orgId,
+          ctx.session.id,
+          apiDoc,
+          docUrl
+        )
+      }
+      result = true
+    } else {
+      result = await MigrateService.importRepoFromSwaggerDocData(
+        orgId,
+        ctx.session.id,
+        apiDocs,
+        docUrl
+      )
+    }
+    result = true
+  } catch (error) {
+    console.log(error)
+  }
+
+
+  ctx.body = {
+    isOk: result,
+    message: result ? "导入成功" : "导入失败",
+    repository: {
+      id: 1
     }
   }
 })

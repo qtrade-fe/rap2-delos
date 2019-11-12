@@ -1,24 +1,29 @@
-import * as svgCaptcha from 'svg-captcha'
-import { User, Notification, Logger, Organization, Repository } from '../models'
-import router from './router'
-import { Model } from 'sequelize-typescript'
-import Pagination from './utils/pagination'
-import { QueryInclude } from '../models'
-import { Op } from 'sequelize'
-import MailService from '../service/mail'
-import * as md5 from 'md5'
-import { isLoggedIn } from './base'
-import { AccessUtils } from './utils/access'
-import { COMMON_ERROR_RES } from './utils/const'
+import * as svgCaptcha from "svg-captcha"
+import {
+  User,
+  Notification,
+  Logger,
+  Organization,
+  Repository,
+  OrganizationsMembers
+} from "../models"
+import router from "./router"
+import { Model } from "sequelize-typescript"
+import Pagination from "./utils/pagination"
+import { QueryInclude } from "../models"
+import { Op } from "sequelize"
+import MailService from "../service/mail"
+import * as md5 from "md5"
+import { isLoggedIn } from "./base"
+import { AccessUtils } from "./utils/access"
+import { COMMON_ERROR_RES } from "./utils/const"
+import WorkWXApi from "../service/workWXApi"
 
-
-
-
-router.get('/app/get', async (ctx, next) => {
+router.get("/app/get", async (ctx, next) => {
   let data: any = {}
   let query = ctx.query
   let hooks: any = {
-    user: User,
+    user: User
   }
   for (let name in hooks) {
     if (!query[name]) continue
@@ -27,19 +32,19 @@ router.get('/app/get', async (ctx, next) => {
     })
   }
   ctx.body = {
-    data: Object.assign({}, ctx.body && ctx.body.data, data),
+    data: Object.assign({}, ctx.body && ctx.body.data, data)
   }
 
   return next()
 })
 
-router.get('/account/count', async (ctx) => {
+router.get("/account/count", async ctx => {
   ctx.body = {
-    data: await User.count(),
+    data: await User.count()
   }
 })
 
-router.get('/account/list', isLoggedIn, async (ctx) => {
+router.get("/account/list", isLoggedIn, async ctx => {
   // if (!AccessUtils.isAdmin(ctx.session.id)) {
   //   ctx.body = COMMON_ERROR_RES.ACCESS_DENY
   //   return
@@ -48,47 +53,59 @@ router.get('/account/list', isLoggedIn, async (ctx) => {
   let { name } = ctx.query
   if (name) {
     Object.assign(where, {
-      [Op.or]: [{
-        fullname: {
-          [Op.like]: `%${name}%`
-        },
-      }],
+      [Op.or]: [
+        {
+          fullname: {
+            [Op.like]: `%${name}%`
+          }
+        }
+      ]
     })
   }
   let options = { where }
   let total = await User.count(options)
-  let pagination = new Pagination(total, ctx.query.cursor || 1, ctx.query.limit || 10)
+  let pagination = new Pagination(
+    total,
+    ctx.query.cursor || 1,
+    ctx.query.limit || 10
+  )
   ctx.body = {
-    data: await User.findAll(Object.assign(options, {
-      attributes: ['id', 'fullname', 'email'],
-      offset: pagination.start,
-      limit: pagination.limit,
-      order: [
-        ['id', 'DESC'],
-      ],
-    })),
-    pagination: pagination,
+    data: await User.findAll(
+      Object.assign(options, {
+        attributes: ["id", "fullname", "email"],
+        offset: pagination.start,
+        limit: pagination.limit,
+        order: [["id", "DESC"]]
+      })
+    ),
+    pagination: pagination
   }
 })
 
-router.get('/account/info', async (ctx) => {
+router.get("/account/info", async ctx => {
   ctx.body = {
-    data: ctx.session.id ? await User.findByPk(ctx.session.id, {
-      attributes: QueryInclude.User.attributes
-    }) : undefined
+    data: ctx.session.id
+      ? await User.findByPk(ctx.session.id, {
+          attributes: QueryInclude.User.attributes
+        })
+      : undefined
   }
 })
 
-router.post('/account/login', async (ctx) => {
+router.post("/account/login", async ctx => {
   let { email, password, captcha } = ctx.request.body
   let result, errMsg
-  if (process.env.TEST_MODE !== 'true' &&
-    (!captcha || !ctx.session.captcha || captcha.trim().toLowerCase() !== ctx.session.captcha.toLowerCase())) {
-    errMsg = '错误的验证码'
+  if (
+    process.env.TEST_MODE !== "true" &&
+    (!captcha ||
+      !ctx.session.captcha ||
+      captcha.trim().toLowerCase() !== ctx.session.captcha.toLowerCase())
+  ) {
+    errMsg = "错误的验证码"
   } else {
     result = await User.findOne({
       attributes: QueryInclude.User.attributes,
-      where: { email, password: md5(md5(password)) },
+      where: { email, password: md5(md5(password)) }
     })
     if (result) {
       ctx.session.id = result.id
@@ -97,47 +114,106 @@ router.post('/account/login', async (ctx) => {
       let app: any = ctx.app
       app.counter.users[result.fullname] = true
     } else {
-      errMsg = '账号或密码错误'
+      errMsg = "账号或密码错误"
     }
   }
   ctx.body = {
-    data: result ? result : { errMsg },
+    data: result ? result : { errMsg }
   }
 })
 
-router.get('/captcha_data', ctx => {
+router.get("/captcha_data", ctx => {
   ctx.body = {
     data: JSON.stringify(ctx.session)
   }
 })
 
-router.get('/account/logout', async (ctx) => {
-  let app: any = ctx.app
-  delete app.counter.users[ctx.session.email]
-  let id = ctx.session.id
-  Object.assign(ctx.session, { id: undefined, fullname: undefined, email: undefined })
+router.get("/account/wx_login", async ctx => {
+  const { code, state } = ctx.query
+  const { UserId: wxUserId } = await WorkWXApi.getUserInfoByCode(code)
+  let result
+  result = await User.findOne({
+    // attributes: QueryInclude.User.attributes,
+    where: { wxUserId: wxUserId }
+  })
+  if (result) {
+    ctx.session.id = result.id
+    ctx.session.fullname = result.fullname
+    ctx.session.email = result.email
+    let app: any = ctx.app
+    app.counter.users[result.fullname] = true
+  } else {
+    const wxUser = await WorkWXApi.getUser(wxUserId)
+    const { name, email, avatar } = wxUser
+    // login automatically after register
+    result = await User.create({
+      email,
+      wxUserId,
+      avatar,
+      fullname: name
+    })
+
+    if (result) {
+      ctx.session.id = result.id
+      ctx.session.fullname = result.fullname
+      ctx.session.email = result.email
+      let app: any = ctx.app
+      app.counter.users[result.fullname] = true
+      await OrganizationsMembers.create({
+        userId: result.id,
+        organizationId: 1
+      })
+    }
+  }
+  ctx.response.redirect(state)
+})
+router.get("/wx_login/test", async ctx => {
+  // const data = await WorkWXApi.getUser("qy01751a131900cf0069109de522");
+  let result, errMsg
+  result = await User.findOne({
+    attributes: QueryInclude.User.attributes,
+    where: { wxUserId: "qy01751a131900cf0069109de522" }
+  })
   ctx.body = {
-    data: await { id },
+    data: result ? result : { errMsg }
   }
 })
 
-router.post('/account/register', async (ctx) => {
+router.get("/account/logout", async ctx => {
+  let app: any = ctx.app
+  delete app.counter.users[ctx.session.email]
+  let id = ctx.session.id
+  Object.assign(ctx.session, {
+    id: undefined,
+    fullname: undefined,
+    email: undefined
+  })
+  ctx.body = {
+    data: await { id }
+  }
+})
+
+router.post("/account/register", async ctx => {
   let { fullname, email, password } = ctx.request.body
   let exists = await User.findAll({
-    where: { email },
+    where: { email }
   })
   if (exists && exists.length) {
     ctx.body = {
       data: {
         isOk: false,
-        errMsg: '该邮件已被注册，请更换再试。',
-      },
+        errMsg: "该邮件已被注册，请更换再试。"
+      }
     }
     return
   }
 
   // login automatically after register
-  let result = await User.create({ fullname, email, password: md5(md5(password)) })
+  let result = await User.create({
+    fullname,
+    email,
+    password: md5(md5(password))
+  })
 
   if (result) {
     ctx.session.id = result.id
@@ -151,20 +227,20 @@ router.post('/account/register', async (ctx) => {
     data: {
       id: result.id,
       fullname: result.fullname,
-      email: result.email,
-    },
+      email: result.email
+    }
   }
 })
 
-router.post('/account/update', async (ctx) => {
+router.post("/account/update", async ctx => {
   const { password } = ctx.request.body
-  let errMsg = ''
+  let errMsg = ""
   let isOk = false
 
   if (!ctx.session || !ctx.session.id) {
-    errMsg = '登陆超时'
+    errMsg = "登陆超时"
   } else if (password.length < 6) {
-    errMsg = '密码长度过短'
+    errMsg = "密码长度过短"
   } else {
     const user = await User.findByPk(ctx.session.id)
     user.password = md5(md5(password))
@@ -179,100 +255,112 @@ router.post('/account/update', async (ctx) => {
   }
 })
 
-router.get('/account/remove', isLoggedIn, async (ctx) => {
+router.get("/account/remove", isLoggedIn, async ctx => {
   if (!AccessUtils.isAdmin(ctx.session.id)) {
     ctx.body = COMMON_ERROR_RES.ACCESS_DENY
     return
   }
-  if (process.env.TEST_MODE === 'true') {
+  if (process.env.TEST_MODE === "true") {
     ctx.body = {
       data: await User.destroy({
-        where: { id: ctx.query.id },
-      }),
+        where: { id: ctx.query.id }
+      })
     }
   } else {
     ctx.body = {
       data: {
         isOk: false,
-        errMsg: 'access forbidden',
-      },
+        errMsg: "access forbidden"
+      }
     }
   }
 })
 
 // TODO 2.3 账户设置
-router.get('/account/setting', async (ctx) => {
+router.get("/account/setting", async ctx => {
   ctx.body = {
-    data: {},
+    data: {}
   }
 })
 
-router.post('/account/setting', async (ctx) => {
+router.post("/account/setting", async ctx => {
   ctx.body = {
-    data: {},
+    data: {}
   }
 })
 
 // TODO 2.3 账户通知
 let NOTIFICATION_EXCLUDE_ATTRIBUTES: any = []
-router.get('/account/notification/list', async (ctx) => {
+router.get("/account/notification/list", async ctx => {
   let total = await Notification.count()
-  let pagination = new Pagination(total, ctx.query.cursor || 1, ctx.query.limit || 10)
+  let pagination = new Pagination(
+    total,
+    ctx.query.cursor || 1,
+    ctx.query.limit || 10
+  )
   ctx.body = {
     data: await Notification.findAll({
       attributes: { exclude: NOTIFICATION_EXCLUDE_ATTRIBUTES },
       offset: pagination.start,
       limit: pagination.limit,
-      order: [
-        ['id', 'DESC'],
-      ],
+      order: [["id", "DESC"]]
     }),
-    pagination: pagination,
+    pagination: pagination
   }
 })
 
-router.get('/account/notification/unreaded', async (ctx) => {
+router.get("/account/notification/unreaded", async ctx => {
   ctx.body = {
-    data: [],
+    data: []
   }
 })
 
-router.post('/account/notification/unreaded', async (ctx) => {
+router.post("/account/notification/unreaded", async ctx => {
   ctx.body = {
-    data: 0,
+    data: 0
   }
 })
 
-router.post('/account/notification/read', async (ctx) => {
+router.post("/account/notification/read", async ctx => {
   ctx.body = {
-    data: 0,
+    data: 0
   }
 })
 
 // TODO 2.3 账户日志
-router.get('/account/logger', async (ctx) => {
+router.get("/account/logger", async ctx => {
   if (!ctx.session.id) {
     ctx.body = {
       data: {
         isOk: false,
-        errMsg: 'not login'
+        errMsg: "not login"
       }
     }
     return
   }
   let auth = await User.findByPk(ctx.session.id)
-  let repositories: Model<Repository>[] = [...(<Model<Repository>[]>await auth.$get('ownedRepositories')), ...(<Model<Repository>[]>await auth.$get('joinedRepositories'))]
-  let organizations: Model<Organization>[] = [...(<Model<Organization>[]>await auth.$get('ownedOrganizations')), ...(<Model<Organization>[]>await auth.$get('joinedOrganizations'))]
+  let repositories: Model<Repository>[] = [
+    ...(<Model<Repository>[]>await auth.$get("ownedRepositories")),
+    ...(<Model<Repository>[]>await auth.$get("joinedRepositories"))
+  ]
+  let organizations: Model<Organization>[] = [
+    ...(<Model<Organization>[]>await auth.$get("ownedOrganizations")),
+    ...(<Model<Organization>[]>await auth.$get("joinedOrganizations"))
+  ]
 
   let where: any = {
     [Op.or]: [
       { userId: ctx.session.id },
       { repositoryId: repositories.map(item => item.id) },
-      { organizationId: organizations.map(item => item.id) },
-    ],
+      { organizationId: organizations.map(item => item.id) }
+    ]
   }
   let total = await Logger.count({ where })
-  let pagination = new Pagination(total, ctx.query.cursor || 1, ctx.query.limit || 100)
+  let pagination = new Pagination(
+    total,
+    ctx.query.cursor || 1,
+    ctx.query.limit || 100
+  )
   let logs = await Logger.findAll({
     where,
     attributes: {},
@@ -282,44 +370,46 @@ router.get('/account/logger', async (ctx) => {
       QueryInclude.Organization,
       QueryInclude.Repository,
       QueryInclude.Module,
-      QueryInclude.Interface,
+      QueryInclude.Interface
     ],
     offset: pagination.start,
     limit: pagination.limit,
-    order: [
-      ['id', 'DESC'],
-    ],
-    paranoid: false,
+    order: [["id", "DESC"]],
+    paranoid: false
   } as any)
 
   ctx.body = {
     data: logs,
-    pagination,
+    pagination
   }
 })
 
-router.get('/captcha', async (ctx) => {
+router.get("/captcha", async ctx => {
   const captcha = svgCaptcha.create()
   ctx.session.captcha = captcha.text
-  ctx.set('Content-Type', 'image/svg+xml')
+  ctx.set("Content-Type", "image/svg+xml")
   ctx.body = captcha.data
 })
 
-router.get('/worker', async (ctx) => {
-  ctx.body = process.env.NODE_APP_INSTANCE || 'NOT FOUND'
+router.get("/worker", async ctx => {
+  ctx.body = process.env.NODE_APP_INSTANCE || "NOT FOUND"
 })
 
-router.post('/account/reset', async (ctx) => {
+router.post("/account/reset", async ctx => {
   const email = ctx.request.body.email
   const password = ctx.request.body.password
-  if (password && ctx.session.resetCode && password === ctx.session.resetCode + '') {
+  if (
+    password &&
+    ctx.session.resetCode &&
+    password === ctx.session.resetCode + ""
+  ) {
     const newPassword = String(Math.floor(Math.random() * 99999999))
     const user = await User.findOne({ where: { email } })
     if (!user) {
       ctx.body = {
         data: {
           isOk: false,
-          errMsg: '您的邮箱没被注册过。',
+          errMsg: "您的邮箱没被注册过。"
         }
       }
       return
@@ -329,15 +419,17 @@ router.post('/account/reset', async (ctx) => {
     ctx.body = {
       data: {
         isOk: true,
-        data: newPassword,
+        data: newPassword
       }
     }
   } else {
-    const resetCode = ctx.session.resetCode = Math.floor(Math.random() * 999999)
-    MailService.send(email, 'RAP重置账户验证码', `您的验证码为：${resetCode}`)
+    const resetCode = (ctx.session.resetCode = Math.floor(
+      Math.random() * 999999
+    ))
+    MailService.send(email, "RAP重置账户验证码", `您的验证码为：${resetCode}`)
     ctx.body = {
       data: {
-        isOk: true,
+        isOk: true
       }
     }
   }

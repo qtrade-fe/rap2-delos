@@ -21,6 +21,15 @@ export default class User extends Model<User> {
   @Column(DataType.STRING(128))
   email: string
 
+  @AllowNull(true)
+  @Unique
+  @Column(DataType.STRING(128))
+  wxUserId: string
+
+  @AllowNull(true)
+  @Column(DataType.STRING(256))
+  avatar: string
+
   @HasMany(() => Organization, 'ownerId')
   ownedOrganizations: Organization[]
 

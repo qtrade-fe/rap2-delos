@@ -2,6 +2,7 @@ import router from './router'
 import { COMMON_ERROR_RES } from './utils/const'
 import PostmanService from '../service/export/postman'
 import MarkdownService from '../service/export/markdown'
+import HtmlService from '../service/export/html'
 // import PDFService from '../service/export/pdf'
 import DocxService from '../service/export/docx'
 import { AccessUtils, ACCESS_TYPE } from './utils/access'
@@ -9,16 +10,16 @@ import { Repository } from '../models/'
 
 router.get('/export/postman', async ctx => {
   const repoId = +ctx.query.id
-  if (
-    !(await AccessUtils.canUserAccess(
-      ACCESS_TYPE.REPOSITORY,
-      ctx.session.id,
-      repoId
-    ))
-  ) {
-    ctx.body = COMMON_ERROR_RES.ACCESS_DENY
-    return
-  }
+  // if (
+  //   !(await AccessUtils.canUserAccess(
+  //     ACCESS_TYPE.REPOSITORY,
+  //     ctx.session.id,
+  //     repoId
+  //   ))
+  // ) {
+  //   ctx.body = COMMON_ERROR_RES.ACCESS_DENY
+  //   return
+  // }
   if (!(repoId > 0)) {
     ctx.data = COMMON_ERROR_RES.ERROR_PARAMS
   }
@@ -41,6 +42,35 @@ router.get('/export/markdown', async ctx => {
     ctx.data = COMMON_ERROR_RES.ERROR_PARAMS
   }
   ctx.body = await MarkdownService.export(repoId, ctx.query.origin)
+})
+
+router.get('/export/html', async ctx => {
+  const repoId = +ctx.query.id
+  if (
+    !(await AccessUtils.canUserAccess(
+      ACCESS_TYPE.REPOSITORY,
+      ctx.session.id,
+      repoId
+    ))
+  ) {
+    ctx.body = COMMON_ERROR_RES.ACCESS_DENY
+    return
+  }
+  if (!(repoId > 0)) {
+    ctx.data = COMMON_ERROR_RES.ERROR_PARAMS
+  }
+  const repository = await Repository.findByPk(repoId)
+  ctx.body = await HtmlService.export(repoId, ctx.query.origin)
+  ctx.set(
+    'Content-Disposition',
+    `attachment; filename="RAP-${encodeURI(
+      repository.name
+    )}-${encodeURI('接口文档')}.html"`
+  )
+  ctx.set(
+    'Content-type',
+    'application/html'
+  )
 })
 
 router.get('/export/docx', async ctx => {

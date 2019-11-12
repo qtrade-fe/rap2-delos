@@ -10,20 +10,24 @@ declare interface RedisAndClusterOptions extends RedisOptions {
   redisOptions?: any
 }
 
-
 declare interface IConfigOptions {
   version: string
   serve: {
-    port: number
-    path: string // Context Path
-  },
+    port: number;
+    path: string; // Context Path
+  }
   keys: string[]
   session: {
-    key: string
-  },
+    key: string;
+  }
   keycenter?: string | boolean
   db: ISequelizeConfig
   redis: RedisAndClusterOptions
   mail: SMTPTransport
   mailSender: string
+  work_wx: {
+    corpId: string;
+    agentId: string;
+    agentSecret: string;
+  }
 }

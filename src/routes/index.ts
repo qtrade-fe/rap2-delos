@@ -7,5 +7,6 @@ require('./repository')
 require('./mock')
 require('./analytics')
 require('./export')
+require('./oauth')
 
 export default router

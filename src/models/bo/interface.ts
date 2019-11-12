@@ -1,21 +1,52 @@
-import { Table, Column, Model, HasMany, AutoIncrement, PrimaryKey, AllowNull, DataType, Default, BelongsTo, ForeignKey, BeforeBulkDestroy, BeforeBulkCreate, BeforeBulkUpdate, BeforeCreate, BeforeUpdate, BeforeDestroy } from 'sequelize-typescript'
-import { User, Module, Repository, Property } from '../'
-import RedisService, { CACHE_KEY } from '../../service/redis'
-import * as Sequelize from 'sequelize'
+import {
+  Table,
+  Column,
+  Model,
+  HasMany,
+  AutoIncrement,
+  PrimaryKey,
+  AllowNull,
+  DataType,
+  Default,
+  BelongsTo,
+  ForeignKey,
+  BeforeBulkDestroy,
+  BeforeBulkCreate,
+  BeforeBulkUpdate,
+  BeforeCreate,
+  BeforeUpdate,
+  BeforeDestroy
+} from "sequelize-typescript"
+import { User, Module, Repository, Property } from "../"
+import RedisService, { CACHE_KEY } from "../../service/redis"
+import * as Sequelize from "sequelize"
 
 const Op = Sequelize.Op
 
-enum methods { GET = 'GET', POST = 'POST', PUT = 'PUT', DELETE = 'DELETE' }
+enum methods {
+  GET = "GET",
+  POST = "POST",
+  PUT = "PUT",
+  DELETE = "DELETE"
+}
+enum bodyType {
+  FORM_DATA = "FORM_DATA",
+  FORM_URLENCODED = "FORM_URLENCODED",
+  RAW = "RAW",
+  BINARY = "BINARY"
+}
 
 @Table({ paranoid: true, freezeTableName: false, timestamps: true })
 export default class Interface extends Model<Interface> {
-
   /** hooks */
   @BeforeCreate
   @BeforeUpdate
   @BeforeDestroy
   static async deleteCache(instance: Interface) {
-    await RedisService.delCache(CACHE_KEY.REPOSITORY_GET, instance.repositoryId)
+    await RedisService.delCache(
+      CACHE_KEY.REPOSITORY_GET,
+      instance.repositoryId
+    )
   }
 
   @BeforeBulkCreate
@@ -42,6 +73,7 @@ export default class Interface extends Model<Interface> {
   }
 
   public static METHODS = methods
+  public static BODY_TYPE = bodyType
 
   public request?: object
   public response?: object
@@ -60,7 +92,7 @@ export default class Interface extends Model<Interface> {
   url: string
 
   @AllowNull(false)
-  @Column({ comment: 'API method' })
+  @Column({ comment: "API method" })
   method: string
 
   @Column(DataType.TEXT)
@@ -74,6 +106,10 @@ export default class Interface extends Model<Interface> {
   @Default(200)
   @Column
   status: number
+
+  @Default("raw")
+  @Column({ comment: "Request Body Data Type" })
+  bodyType: string
 
   @ForeignKey(() => User)
   @Column
@@ -91,20 +127,18 @@ export default class Interface extends Model<Interface> {
   @Column
   repositoryId: number
 
-  @BelongsTo(() => User, 'creatorId')
+  @BelongsTo(() => User, "creatorId")
   creator: User
 
-  @BelongsTo(() => User, 'lockerId')
+  @BelongsTo(() => User, "lockerId")
   locker: User
 
-  @BelongsTo(() => Module, 'moduleId')
+  @BelongsTo(() => Module, "moduleId")
   module: Module
 
-  @BelongsTo(() => Repository, 'repositoryId')
+  @BelongsTo(() => Repository, "repositoryId")
   repository: Repository
 
-  @HasMany(() => Property, 'interfaceId')
+  @HasMany(() => Property, "interfaceId")
   properties: Property[]
-
 }
-
