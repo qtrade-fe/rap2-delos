@@ -512,7 +512,7 @@ router.post('/module/sort', isLoggedIn, async (ctx) => {
   }
 })
 
-//
+// 接口
 router.get('/interface/count', async (ctx) => {
   ctx.body = {
     data: await Interface.count(),
@@ -1052,8 +1052,8 @@ router.post("/repository/import/swagger/data", async ctx => {
         await MigrateService.importRepoFromSwaggerDocData(
           orgId,
           ctx.session.id,
-          apiDoc,
-          docUrl
+          apiDoc.data,
+          apiDoc.url
         )
       }
       result = true
@@ -1078,4 +1078,67 @@ router.post("/repository/import/swagger/data", async ctx => {
       id: 1
     }
   }
+})
+
+router.post("/repository/sync", async (ctx, next) => {
+  if (!ctx.session.id) {
+    ctx.body = Consts.COMMON_ERROR_RES.NOT_LOGIN
+    return
+  }
+
+  const { id } = ctx.request.body
+
+  const counter = await MigrateService.syncRepositoryByDocUrl(id, ctx.session.id)
+  let repo: Partial<Repository>
+  let [repositoryOmitModules, repositoryModules] = await Promise.all([
+    Repository.findByPk(id, {
+      attributes: { exclude: [] },
+      include: [
+        QueryInclude.Creator,
+        QueryInclude.Owner,
+        QueryInclude.Locker,
+        QueryInclude.Members,
+        QueryInclude.Organization,
+        QueryInclude.Collaborators,
+      ]
+    }),
+    Repository.findByPk(id, {
+      attributes: { exclude: [] },
+      include: [QueryInclude.RepositoryHierarchy],
+      order: [
+        [{ model: Module, as: 'modules' }, 'priority', 'asc'],
+        [
+          { model: Module, as: 'modules' },
+          { model: Interface, as: 'interfaces' },
+          'priority',
+          'asc'
+        ]
+      ]
+    })
+  ])
+  repo = {
+    ...repositoryOmitModules.toJSON(),
+    ...repositoryModules.toJSON()
+  }
+  await RedisService.setCache(
+    CACHE_KEY.REPOSITORY_GET,
+    JSON.stringify(repo),
+    id
+  )
+
+  ctx.body = {
+    data: {
+      repo,
+      counter
+    },
+  }
+  return next()
+}, async (ctx) => {
+  if (!ctx.body.data) return
+  let { repo } = ctx.body.data
+  await Logger.create({
+    userId: ctx.session.id,
+    type: 'sync',
+    repositoryId: repo.id
+  })
 })

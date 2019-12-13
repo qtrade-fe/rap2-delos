@@ -273,7 +273,7 @@ export default class MigrateService {
   }
   public static async syncProperties(
     itf: Interface,
-    { deleteProps, modify }: SyncData,
+    { deleteProps, modify }: SyncInterfaceData,
     curUserId: number
   ) {
     let dCount = 0
@@ -284,7 +284,7 @@ export default class MigrateService {
       dCount += 1
       await p.destroy({ force: true })
     }
-    async function syncProps(m: ModifyArgs, parentId?: number) {
+    async function syncProps(m: PropertiesModifyArgs, parentId?: number) {
       let currId = m.id
       if (m.type == "create") {
         cCount += 1
@@ -350,6 +350,206 @@ export default class MigrateService {
 
     return await this.syncProperties(itf, syncData, curUserId)
   }
+
+  public static async syncRepository(
+    repo: Repository,
+    syncData: SyncRepositoryData,
+    curUserId: number
+  ) {
+
+    const { modifyModules, modifyInterfaces, modifyProperties } = syncData
+
+    let dModCount = 0
+    let cModCount = 0
+    let mModCount = 0
+
+    let dItfCount = 0
+    let cItfCount = 0
+    let mItfCount = 0
+
+    let dPropCount = 0
+    let cPropCount = 0
+    let mPropCount = 0
+
+    for (const mod of modifyModules.delete) {
+      dModCount++
+      const { id } = mod
+      await Module.destroy({ where: { id } })
+      await Interface.destroy({ where: { moduleId: id } })
+      await Property.destroy({
+        force: true,
+        where: { moduleId: id }
+      })
+    }
+
+    for (const itf of modifyInterfaces.delete) {
+      dItfCount++
+      const { id } = itf
+      await Interface.destroy({ where: { id } })
+      await Property.destroy({
+        force: true,
+        where: { interfaceId: id }
+      })
+    }
+
+    for (const prop of modifyProperties.delete) {
+      dPropCount++
+      await Property.destroy({
+        force: true,
+        where: { id: prop.id }
+      })
+    }
+
+    for (const mod of modifyModules.modify) {
+      if (mod.type === 'create') {
+        cModCount++
+        await createModule(mod.prop)
+      } else if (mod.type === 'update') {
+        mModCount++
+        await Module.update({ ...mod.prop }, {
+          where: { id: mod.id }
+        })
+      }
+    }
+
+    for (const itf of modifyInterfaces.modify) {
+      if (itf.type === 'create') {
+        cItfCount++
+        await createInterface(itf.prop)
+      } else if (itf.type === 'update') {
+        mItfCount++
+        await Interface.update({ ...itf.prop }, {
+          where: { id: itf.id }
+        })
+      }
+    }
+
+    for (const prop of modifyProperties.modify) {
+      if (prop.type === 'create') {
+        await createProperty(prop, prop.parentId)
+      } else if (prop.type === 'update') {
+        mPropCount++
+        await Property.update({ ...prop.prop }, {
+          where: { id: prop.id }
+        })
+      }
+    }
+
+    async function createModule(module: any) {
+      const mod = await Module.create({
+        name: module.name,
+        description: module.description,
+        priority: Date.now(),
+        creatorId: curUserId,
+        repositoryId: repo.id
+      })
+      for (const action of module.interfaces) {
+        await createInterface(action, mod)
+      }
+    }
+
+    async function createInterface(action: any, mod?: any) {
+      const itf = await Interface.create({
+        moduleId: action.moduleId || mod.id,
+        name: action.name,
+        description: "",
+        url: action.url || "",
+        priority: Date.now(),
+        creatorId: curUserId,
+        repositoryId: repo.id,
+        method: action.method.toUpperCase(),
+        bodyType: getBodyType(action)
+      })
+      for (const p of action.requests) {
+        await processParam(p, SCOPES.REQUEST)
+      }
+      for (const p of action.responses) {
+        await processParam(p, SCOPES.RESPONSE)
+      }
+
+      async function processParam(
+        p: SwaggerParameter,
+        scope: SCOPES,
+        parent: {
+          id?: number;
+          in?: string;
+        } = {}
+      ) {
+        if (scope === SCOPES.REQUEST) {
+          p.in = p.in || parent.in
+        }
+        const baseProp = getBaseProps(p, scope)
+        const pCreated = await Property.create({
+          ...baseProp,
+          priority: Date.now(),
+          creatorId: curUserId,
+          interfaceId: itf.id,
+          moduleId: itf.moduleId,
+          repositoryId: repo.id,
+          parentId: parent.id || -1
+        })
+        if (p.type === "array" && p.properties) {
+          for (const subParam of Object.keys(p.properties)) {
+            processParam(p.properties[subParam], scope, {
+              id: pCreated.id,
+              in: p.in
+            })
+          }
+        }
+        if (p.type === "object") {
+          for (const subParam of Object.keys(p.properties)) {
+            processParam(p.properties[subParam], scope, {
+              id: pCreated.id,
+              in: p.in
+            })
+          }
+        }
+      }
+    }
+
+    async function createProperty(m: PropertiesCreateArgs, parentId: number) {
+      cPropCount++
+      const pCreated = await Property.create({
+        ...m.prop,
+        priority: Date.now(),
+        creatorId: curUserId,
+        repositoryId: repo.id,
+        parentId: parentId || -1
+      })
+      let currId = pCreated.id
+      for (const c of m.children) {
+        await createProperty(c, currId)
+      }
+    }
+
+    return {
+      cModCount,
+      dModCount,
+      mModCount,
+      cItfCount,
+      dItfCount,
+      mItfCount,
+      cPropCount,
+      dPropCount,
+      mPropCount
+    }
+  }
+  public static async syncRepositoryByDocUrl(
+    repoId: number,
+    curUserId: number
+  ): Promise<any> {
+    const repo = await Repository.findByPk(repoId, {
+      attributes: { exclude: [] },
+      include: [QueryInclude.RepositoryHierarchy],
+    })
+    const { sourceUrl, modules } = repo
+    const apiDocs = await getSwaggerApiDoc(sourceUrl)
+    const swaggerRepo = translateSwaggerDoc(apiDocs)
+    const swaggerModules = swaggerRepo.modules
+
+    const syncData = modifyRepositoryAndSwaggerDoc(modules, swaggerModules)
+    return await this.syncRepository(repo, syncData, curUserId)
+  }
 }
 
 function getMethodFromRAP1RequestType(type: number) {
@@ -410,8 +610,8 @@ function getBaseProps(swaggerProp: SwaggerParameter, scope: string) {
   if (scope === SCOPES.REQUEST) {
     pos = getPosByString(swaggerProp.in)
   }
-  let rule = undefined
-  let value = undefined
+  let rule = ''
+  let value = ''
   if (swaggerProp.example) {
     let exampleStr = swaggerProp.example.toString()
     if (exampleStr.indexOf("|") === -1) {
@@ -424,7 +624,7 @@ function getBaseProps(swaggerProp: SwaggerParameter, scope: string) {
     rule = mockRule[0]
     value = mockRule[1]
   }
-  const description = swaggerProp.description || undefined
+  const description = swaggerProp.description || ''
   return {
     scope,
     name,
@@ -433,7 +633,70 @@ function getBaseProps(swaggerProp: SwaggerParameter, scope: string) {
     pos,
     rule,
     value,
-    required: swaggerProp.required
+    required: !!swaggerProp.required
+  }
+}
+function getDeleted(modify: any[], list: any[]) {
+  const updateIds = new Set()
+
+  function getID(modifyArgsList: any[]) {
+    modifyArgsList.forEach(modifyArgs => {
+      if (modifyArgs.id) {
+        updateIds.add(modifyArgs.id)
+      }
+      if (modifyArgs.children) {
+        getID(modifyArgs.children)
+      }
+    })
+  }
+  getID(modify)
+  const deleted = list.filter(item => !updateIds.has(item.id))
+  return deleted
+}
+
+function modifyRepositoryAndSwaggerDoc(
+  modules: Module[],
+  swaggerModules: any[]
+): SyncRepositoryData {
+  const modifyModules: SyncData = {
+    delete: [],
+    modify: []
+  }
+  const modifyInterfaces: SyncData = {
+    delete: [],
+    modify: []
+  }
+  const modifyProperties: SyncData = {
+    delete: [],
+    modify: []
+  }
+
+  const modifyMids = []
+  for (const m of swaggerModules) {
+    const { modify, interfaces, properties } = modifyModulesAndSwagger(m, modules)
+    modifyMids.push({
+      id: modify.id
+    })
+    if (modify.type !== 'equal') {
+      modifyModules.modify.push(modify)
+    }
+
+    if (interfaces) {
+      modifyInterfaces.delete = modifyInterfaces.delete.concat(interfaces.delete)
+      modifyInterfaces.modify = modifyInterfaces.modify.concat(interfaces.modify)
+    }
+    if (properties) {
+      modifyProperties.delete = modifyProperties.delete.concat(properties.delete)
+      modifyProperties.modify = modifyProperties.modify.concat(properties.modify)
+    }
+  }
+  const deleteModules = getDeleted(modifyMids, modules)
+  modifyModules.delete = deleteModules
+
+  return {
+    modifyModules,
+    modifyInterfaces,
+    modifyProperties
   }
 }
 function modifyInterfaceAndSwaggerDoc(
@@ -445,26 +708,225 @@ function modifyInterfaceAndSwaggerDoc(
   const requests = parentProp.filter(item => item.scope === SCOPES.REQUEST)
   const responses = parentProp.filter(item => item.scope === SCOPES.RESPONSE)
   const modify = []
-  const updateIds = new Set()
   for (const p of swaggerReq) {
     modify.push(modifyPropertiesAndSwagger(p, requests, SCOPES.REQUEST))
   }
   for (const p of swaggerResp) {
     modify.push(modifyPropertiesAndSwagger(p, responses, SCOPES.RESPONSE))
   }
-  function getID(modifyArgsList: ModifyArgs[]) {
-    modifyArgsList.forEach(modifyArgs => {
-      if (modifyArgs.id) {
-        updateIds.add(modifyArgs.id)
-      }
-      getID(modifyArgs.children)
-    })
-  }
-  getID(modify)
-  const deleteProps = properties.filter(item => !updateIds.has(item.id))
+
+  const deleteProps = getDeleted(modify, properties)
+
   return {
     deleteProps,
     modify
+  }
+}
+
+function modifyModulesAndSwagger(
+  swaggerModule: any,
+  modules: Module[],
+) {
+  const prop = {
+    name: swaggerModule.name,
+    description: swaggerModule.description || ''
+  }
+  let type: ModifyType = "equal"
+  const m = modules.find(m => m.name === prop.name)
+  const modify: ModuleModifyArgs = {
+    id: m ? m.id : undefined,
+    type,
+    prop,
+  }
+
+  if (m && !_.isEqualWith(m, prop, equalModules)) {
+    modify.type = "update"
+  } else if (!m) {
+    modify.type = "create"
+    modify.prop.interfaces = swaggerModule.interface
+  }
+
+  let modifyInterfaces: SyncData
+  const modifyProperties: SyncData = {
+    delete: [],
+    modify: []
+  }
+  if (!!m) {
+    const modifyItfs = []
+    const modifyItfIds = []
+    for (const itf of swaggerModule.interface) {
+      const { modify, properties } = modifyInterfacesAndSwagger(itf, m.interfaces, m.id)
+      modifyItfIds.push({
+        id: modify.id
+      })
+      if (modify.type !== 'equal') {
+        modifyItfs.push(modify)
+      }
+
+      if (properties) {
+        modifyProperties.delete = modifyProperties.delete.concat(properties.delete)
+        modifyProperties.modify = modifyProperties.modify.concat(properties.modify)
+      }
+    }
+    const deleteItfs = getDeleted(modifyItfIds, m.interfaces)
+    modifyInterfaces = {
+      modify: modifyItfs,
+      delete: deleteItfs
+    }
+  }
+
+  return {
+    modify,
+    interfaces: modifyInterfaces,
+    properties: modifyProperties
+  }
+}
+function modifyInterfacesAndSwagger(
+  swaggerItf: any,
+  interfaces: Interface[],
+  moduleId: number
+) {
+  const prop = {
+    name: swaggerItf.name,
+    url: swaggerItf.url || "",
+    bodyType: getBodyType(swaggerItf),
+    method: swaggerItf.method.toUpperCase(),
+    status: swaggerItf.status
+  }
+  let type: ModifyType = "equal"
+  const i = interfaces.find(i => i.name === prop.name)
+  const modify: InterfaceModifyArgs = {
+    id: i ? i.id : undefined,
+    type,
+    prop,
+  }
+
+  if (i && !_.isEqualWith(i, prop, equalInterfaces)) {
+    modify.type = "update"
+  } else if (!i) {
+    modify.type = "create"
+    modify.prop.moduleId = moduleId,
+    modify.prop.responses = swaggerItf.responses
+    modify.prop.requests = swaggerItf.requests
+  }
+
+  let modifyProperties: SyncData
+  if (!!i) {
+    let modifyProps: any = [] // 新建+更新集合
+    let mixedProps: any = [] // 新旧交集
+
+    const { requests: swaggerReq, responses: swaggerResp } = swaggerItf
+    const parentProp: any[] = getChildren(-1, i.properties)
+    const requests = parentProp.filter(item => item.scope === SCOPES.REQUEST)
+    const responses = parentProp.filter(item => item.scope === SCOPES.RESPONSE)
+
+    for (const p of swaggerReq) {
+      const { mixeds, modifies } = modifyPropertiesAndSwagger2(p, requests, SCOPES.REQUEST, i)
+      modifyProps = modifyProps.concat(modifies)
+      mixedProps = mixedProps.concat(mixeds)
+    }
+    for (const p of swaggerResp) {
+      const { mixeds, modifies } = modifyPropertiesAndSwagger2(p, responses, SCOPES.RESPONSE, i)
+      modifyProps = modifyProps.concat(modifies)
+      mixedProps = mixedProps.concat(mixeds)
+    }
+    const deleteProps = getDeleted(mixedProps, i.properties)
+    modifyProperties = {
+      modify: modifyProps,
+      delete: deleteProps
+    }
+  }
+
+  return {
+    modify,
+    properties: modifyProperties
+  }
+}
+function modifyPropertiesAndSwagger2(
+  swaggerProp: SwaggerParameter,
+  properties: (Property & { children?: Property[] })[],
+  scope: string,
+  itf: Interface
+) {
+  const modifies: any = [] // 新建+更新集合
+  const mixeds: any = [] // 新旧交集
+
+  function getModifyProperty(
+    swaggerProp: SwaggerParameter,
+    properties: (Property & { children?: Property[] })[],
+    parentId: number
+  ) {
+    const p = properties.find(p => p.name === swaggerProp.name)
+    if (p) {
+      const prop = getBaseProps(swaggerProp, scope)
+      let type: ModifyType = "equal"
+      let children: PropertiesModifyArgs[] = []
+      const modify: PropertiesModifyArgs = {
+        id: p.id,
+        type,
+        prop,
+        children,
+      }
+
+      mixeds.push(modify) // 远程props与现有props的交集，用于找到deleteProps
+
+      if (!_.isEqualWith(p, prop, equalProps)) {
+        modify.type = "update"
+        modifies.push(modify)
+      }
+
+      if (
+        (prop.type === "Array" || prop.type === "Object") &&
+        swaggerProp.properties
+      ) {
+        for (const subParam of Object.keys(swaggerProp.properties)) {
+          getModifyProperty(
+            swaggerProp.properties[subParam],
+            p.children,
+            p.id,
+          )
+        }
+      }
+    } else {
+      parentId = parentId || -1
+      modifies.push(getCreateProperty(swaggerProp, parentId))
+    }
+  }
+
+  function getCreateProperty(swaggerProp: SwaggerParameter, parentId: number) {
+    const prop = getBaseProps(swaggerProp, scope)
+    const type: ModifyType = "create"
+    let children: PropertiesCreateArgs[] = []
+
+    const modify: PropertiesCreateArgs = {
+      type,
+      prop: {
+        ...prop,
+        interfaceId: itf.id,
+        moduleId: itf.moduleId,
+      },
+      parentId,
+      children,
+    }
+
+    if (
+      (prop.type === "Array" || prop.type === "Object") &&
+      swaggerProp.properties
+    ) {
+      for (const subParam of Object.keys(swaggerProp.properties)) {
+        children.push(
+          getCreateProperty(swaggerProp.properties[subParam], undefined)
+        )
+      }
+    }
+
+    return modify
+  }
+
+  getModifyProperty(swaggerProp, properties, undefined)
+  return {
+    mixeds,
+    modifies
   }
 }
 function modifyPropertiesAndSwagger(
@@ -474,9 +936,9 @@ function modifyPropertiesAndSwagger(
 ) {
   const prop = getBaseProps(swaggerProp, scope)
   let type: ModifyType = "equal"
-  let children: ModifyArgs[] = []
+  let children: PropertiesModifyArgs[] = []
   const p = properties.find(p => p.name === prop.name)
-  const modify: ModifyArgs = {
+  const modify: PropertiesModifyArgs = {
     id: p ? p.id : undefined,
     type,
     prop,
@@ -505,8 +967,30 @@ function modifyPropertiesAndSwagger(
 
   return modify
 }
-function equalProps(pValue: Property, sValue: any) {
+
+function equalModules(pValue: Module, sValue: any) {
   if (pValue.description !== sValue.description) {
+    return false
+  }
+  return true
+}
+function equalInterfaces(pValue: Interface, sValue: any) {
+  if (pValue.url !== sValue.url) {
+    return false
+  }
+  if (pValue.bodyType !== sValue.bodyType) {
+    return false
+  }
+  if (pValue.method !== sValue.method) {
+    return false
+  }
+  if (pValue.status !== sValue.status) {
+    return false
+  }
+  return true
+}
+function equalProps(pValue: Property, sValue: any) {
+  if (!!(pValue.description || sValue.description) && pValue.description !== sValue.description) {
     return false
   }
   if (pValue.type !== sValue.type) {
@@ -518,10 +1002,10 @@ function equalProps(pValue: Property, sValue: any) {
   if (pValue.pos !== sValue.pos) {
     return false
   }
-  if (pValue.rule !== sValue.rule) {
+  if (!!(pValue.rule || sValue.rule) && (pValue.rule !== sValue.rule)) {
     return false
   }
-  if (pValue.value !== sValue.value) {
+  if (!!(pValue.value || sValue.value) && (pValue.value !== sValue.value)) {
     return false
   }
   return true
@@ -762,21 +1246,71 @@ interface SwaggerParameter {
 
 type ModifyType = "equal" | "create" | "update"
 
-interface ModifyArgs {
+interface ModuleModifyArgs {
   id?: number
   type: ModifyType
   prop: {
-    scope: string;
-    name: string;
-    type: string;
-    description: string;
-    pos: number;
-    required: boolean;
+    name: string
+    description: string
+    interfaces?: any[]
   }
-  children: ModifyArgs[]
+}
+
+interface InterfaceModifyArgs {
+  id?: number,
+  type: ModifyType,
+  prop: {
+    name: string
+    url: string
+    bodyType: string
+    method: string
+    moduleId?: number
+    responses?: any[]
+    requests?: any[]
+  }
+}
+
+interface PropertiesModifyArgs {
+  id?: number
+  type: ModifyType
+  prop: {
+    scope: string
+    name: string
+    type: string
+    description: string
+    pos: number
+    required: boolean
+  }
+  children: PropertiesModifyArgs[]
+}
+
+interface PropertiesCreateArgs {
+  type: ModifyType
+  prop: {
+    scope: string
+    name: string
+    type: string
+    description: string
+    pos: number
+    required: boolean
+    interfaceId: number
+    moduleId: number
+  }
+  parentId?: number
+  children: PropertiesCreateArgs[]
+}
+
+interface SyncInterfaceData {
+  deleteProps: Property[]
+  modify: PropertiesModifyArgs[]
 }
 
 interface SyncData {
-  deleteProps: Property[]
-  modify: ModifyArgs[]
+  delete: any[]
+  modify: any[]
+}
+interface SyncRepositoryData {
+  modifyModules: SyncData
+  modifyInterfaces: SyncData
+  modifyProperties: SyncData
 }
