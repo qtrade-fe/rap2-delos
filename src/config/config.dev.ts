@@ -12,10 +12,10 @@ let config: IConfigOptions = {
   },
   db: {
     dialect: 'mysql',
-    host: 'dev.qtrade.com.cn',
+    host: '192.168.0.11',
     port: 3306,
     username: 'rap2_admin',
-    password: 'Fu9ZmU6x#2KB',
+    password: '666666',
     database: 'db_rap2_delos_app',
     pool: {
       max: 5,
